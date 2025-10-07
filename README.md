@@ -150,8 +150,16 @@ MIT
 
 ## ✨ Status Projektu
 
-🚧 **W fazie development**
+🟢 **Milestone v1.0 osiągnięty!** (2025-10-07)
 
 Aktualna wersja: **1.0** (UI Mockup)
+- ✅ Tag: `v1.0` w git
+- ✅ Deployed na: http://8.209.82.14/heating
+- ✅ Subfolder deployment skonfigurowany
 
 Następny milestone: Import JPG i rysowanie konturów
+
+### 🔖 Powrót do milestone v1.0
+```bash
+git checkout v1.0
+```
