@@ -29,6 +29,8 @@ import {
 import { generateId } from '../lib/utils';
 import { detectEdgeZones, getEdgeZoneRects } from '../algorithms/edgeZoneDetector';
 import { generateSpiralLoop } from '../algorithms/spiralGenerator';
+import { generateMeanderLoop } from '../algorithms/meanderGenerator';
+import { RoomDimensionEditor } from './RoomDimensionEditor';
 
 export function MinimalDesigner() {
   const canvasRef = useRef<fabric.Canvas | null>(null);
@@ -46,6 +48,7 @@ export function MinimalDesigner() {
 
   const [history, setHistory] = useState<DesignerState[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
+  const [showDimensionEditor, setShowDimensionEditor] = useState(false);
 
   // Canvas ready handler
   const handleCanvasReady = useCallback((canvas: fabric.Canvas) => {
@@ -328,13 +331,10 @@ export function MinimalDesigner() {
     await new Promise((resolve) => setTimeout(resolve, 500));
 
     try {
-      // Generate loop
-      const loop = generateSpiralLoop(
-        state.room,
-        state.entryPoint,
-        state.obstacles,
-        state.edgeZones
-      );
+      // Generate loop based on selected pattern
+      const loop = state.layoutPattern === 'spiral'
+        ? generateSpiralLoop(state.room, state.entryPoint, state.obstacles, state.edgeZones)
+        : generateMeanderLoop(state.room, state.entryPoint, state.obstacles, state.edgeZones);
 
       // Draw loop
       const loopPath = createLoopPath(loop.path);
@@ -411,6 +411,56 @@ export function MinimalDesigner() {
     }
   }, []);
 
+  // Edit room dimensions
+  const handleEditDimensions = useCallback((width: number, height: number) => {
+    if (!canvasRef.current || !state.room) return;
+
+    const canvas = canvasRef.current;
+    const oldRoom = state.room;
+
+    // Keep room centered at same position (adjust by difference)
+    const deltaW = (width - oldRoom.width) / 2;
+    const deltaH = (height - oldRoom.height) / 2;
+
+    const newRoom: Room = {
+      width,
+      height,
+      position: {
+        x: oldRoom.position.x - deltaW,
+        y: oldRoom.position.y - deltaH,
+      },
+    };
+
+    // Clear and redraw room
+    canvas.remove(...canvas.getObjects().filter((obj: any) => obj.roomObject));
+
+    const roomRect = createRoomRect(newRoom.position.x, newRoom.position.y, width, height);
+    (roomRect as any).roomObject = true;
+    canvas.add(roomRect);
+
+    // Redraw edge zones
+    const edgeZones = detectEdgeZones(newRoom);
+    const zoneRects = getEdgeZoneRects(newRoom, edgeZones);
+
+    for (const rect of zoneRects) {
+      const zoneObj = createEdgeZone(rect.x, rect.y, rect.width, rect.height);
+      (zoneObj as any).roomObject = true;
+      canvas.add(zoneObj);
+    }
+
+    canvas.renderAll();
+
+    setState((prev) => ({
+      ...prev,
+      room: newRoom,
+      edgeZones,
+      heatingLoop: null,
+      metrics: null,
+    }));
+
+    toast.success(`Room resized to ${width}m × ${height}m`);
+  }, [state.room]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
@@ -446,6 +496,12 @@ export function MinimalDesigner() {
           if (e.ctrlKey || e.metaKey) {
             e.preventDefault();
             handleGenerate();
+          }
+          break;
+        case 'd':
+          if (state.room) {
+            setShowDimensionEditor(true);
+            toast.info('Edit room dimensions');
           }
           break;
       }
@@ -518,11 +574,22 @@ export function MinimalDesigner() {
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">R</kbd> Draw Room</div>
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">O</kbd> Add Obstacle</div>
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">E</kbd> Set Entry</div>
+            <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">D</kbd> Edit Dimensions</div>
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">Esc</kbd> Select Tool</div>
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">Del</kbd> Delete Selected</div>
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">Ctrl+G</kbd> Generate</div>
           </div>
         </div>
+
+        {/* Room dimension editor */}
+        {showDimensionEditor && state.room && (
+          <RoomDimensionEditor
+            currentWidth={state.room.width}
+            currentHeight={state.room.height}
+            onApply={handleEditDimensions}
+            onClose={() => setShowDimensionEditor(false)}
+          />
+        )}
       </div>
     </div>
   );
