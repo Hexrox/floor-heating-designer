@@ -72,3 +72,13 @@ export function snapToGrid(value: number, gridSize: number): number {
 export function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
+
+/**
+ * Snap point to grid
+ */
+export function snapPointToGrid(point: { x: number; y: number }, gridSize: number): { x: number; y: number } {
+  return {
+    x: Math.round(point.x / gridSize) * gridSize,
+    y: Math.round(point.y / gridSize) * gridSize,
+  };
+}

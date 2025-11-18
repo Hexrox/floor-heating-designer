@@ -1,5 +1,5 @@
 import React from 'react';
-import { Square, Circle, MapPin, Zap } from 'lucide-react';
+import { Square, Circle, MapPin, Zap, Grid } from 'lucide-react';
 import { Button } from './ui/Button';
 import type { Tool, LayoutPattern } from '../types';
 import { motion } from 'framer-motion';
@@ -12,6 +12,8 @@ interface FloatingToolbarProps {
   layoutPattern: LayoutPattern;
   onPatternChange: (pattern: LayoutPattern) => void;
   isGenerating: boolean;
+  snapToGrid: boolean;
+  onSnapToGridChange: (snap: boolean) => void;
 }
 
 export function FloatingToolbar({
@@ -22,6 +24,8 @@ export function FloatingToolbar({
   layoutPattern,
   onPatternChange,
   isGenerating,
+  snapToGrid,
+  onSnapToGridChange,
 }: FloatingToolbarProps) {
   return (
     <motion.div
@@ -76,6 +80,17 @@ export function FloatingToolbar({
             <option value="meander">Meander</option>
           </select>
         </div>
+
+        <label className="flex items-center gap-2 cursor-pointer" title="Snap objects to grid">
+          <input
+            type="checkbox"
+            checked={snapToGrid}
+            onChange={(e) => onSnapToGridChange(e.target.checked)}
+            className="w-4 h-4 text-primary border-gray-300 rounded focus:ring-primary"
+          />
+          <Grid className="w-4 h-4 text-text-light" />
+          <span className="text-sm text-text">Snap to Grid</span>
+        </label>
 
         <Button
           variant="primary"

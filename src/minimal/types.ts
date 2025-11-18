@@ -31,9 +31,20 @@ export interface EntryPoint {
   fabricObject?: any;
 }
 
+/** Wall type for edge zone configuration */
+export type WallType = 'window' | 'external-wall' | 'door' | 'internal-wall';
+
+/** Edge zone configuration per wall */
+export interface EdgeZoneConfig {
+  top: WallType;
+  right: WallType;
+  bottom: WallType;
+  left: WallType;
+}
+
 /** Edge zone configuration */
 export interface EdgeZone {
-  type: 'window' | 'external-wall' | 'door';
+  type: WallType;
   side: 'top' | 'right' | 'bottom' | 'left';
   start: number; // position along the side (0-1)
   length: number; // length as fraction (0-1)
@@ -76,10 +87,12 @@ export interface DesignerState {
   obstacles: Obstacle[];
   entryPoint: EntryPoint | null;
   edgeZones: EdgeZone[];
+  edgeZoneConfig: EdgeZoneConfig;
   heatingLoop: HeatingLoop | null;
   layoutPattern: LayoutPattern;
   isGenerating: boolean;
   metrics: Metrics | null;
+  snapToGrid: boolean;
 }
 
 /** Constants */
@@ -97,4 +110,21 @@ export const CONSTANTS = {
   EDGE_ZONE_WINDOW: 1.0, // 100cm under windows
   EDGE_ZONE_EXTERNAL_WALL: 0.6, // 60cm at external walls
   EDGE_ZONE_DOOR: 0.7, // 70cm at external doors
+  EDGE_ZONE_INTERNAL_WALL: 0.3, // 30cm at internal walls
 } as const;
+
+/** Get edge zone depth by wall type */
+export function getEdgeZoneDepth(wallType: WallType): number {
+  switch (wallType) {
+    case 'window':
+      return CONSTANTS.EDGE_ZONE_WINDOW;
+    case 'external-wall':
+      return CONSTANTS.EDGE_ZONE_EXTERNAL_WALL;
+    case 'door':
+      return CONSTANTS.EDGE_ZONE_DOOR;
+    case 'internal-wall':
+      return CONSTANTS.EDGE_ZONE_INTERNAL_WALL;
+    default:
+      return CONSTANTS.EDGE_ZONE_EXTERNAL_WALL;
+  }
+}

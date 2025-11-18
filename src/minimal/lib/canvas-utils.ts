@@ -212,3 +212,67 @@ export function createLabel(
     evented: false,
   });
 }
+
+/**
+ * Create dimension label for room walls
+ */
+export function createDimensionLabel(
+  text: string,
+  x: number,
+  y: number,
+  options?: { fontSize?: number; fill?: string }
+): fabric.Text {
+  return new fabric.Text(text, {
+    left: metersToPixels(x),
+    top: metersToPixels(y),
+    fontSize: options?.fontSize || 14,
+    fill: options?.fill || '#3B82F6',
+    fontFamily: 'system-ui, sans-serif',
+    fontWeight: 'bold',
+    selectable: false,
+    evented: false,
+    originX: 'center',
+    originY: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    padding: 4,
+  });
+}
+
+/**
+ * Create direction arrow for heating loop
+ */
+export function createDirectionArrow(
+  from: Point,
+  to: Point
+): fabric.Polygon {
+  const angle = Math.atan2(to.y - from.y, to.x - from.x);
+  const headLength = 0.15; // 15cm arrow head
+
+  // Arrow midpoint
+  const midX = (from.x + to.x) / 2;
+  const midY = (from.y + to.y) / 2;
+
+  // Arrow head points
+  const tipX = midX + Math.cos(angle) * headLength / 2;
+  const tipY = midY + Math.sin(angle) * headLength / 2;
+
+  const leftX = tipX - Math.cos(angle + Math.PI / 6) * headLength;
+  const leftY = tipY - Math.sin(angle + Math.PI / 6) * headLength;
+
+  const rightX = tipX - Math.cos(angle - Math.PI / 6) * headLength;
+  const rightY = tipY - Math.sin(angle - Math.PI / 6) * headLength;
+
+  const points = [
+    { x: metersToPixels(tipX), y: metersToPixels(tipY) },
+    { x: metersToPixels(leftX), y: metersToPixels(leftY) },
+    { x: metersToPixels(rightX), y: metersToPixels(rightY) },
+  ];
+
+  return new fabric.Polygon(points, {
+    fill: '#F59E0B',
+    stroke: '#F59E0B',
+    strokeWidth: 1,
+    selectable: false,
+    evented: false,
+  });
+}

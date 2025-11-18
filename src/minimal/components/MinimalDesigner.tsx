@@ -1,10 +1,13 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import * as fabric from 'fabric';
 import { toast, Toaster } from 'sonner';
+import { Grid, Trash2, Loader2 } from 'lucide-react';
 import { TopBar } from './TopBar';
 import { CanvasArea } from './CanvasArea';
 import { FloatingToolbar } from './FloatingToolbar';
 import { MetricsPanel } from './MetricsPanel';
+import { RoomDimensionEditor } from './RoomDimensionEditor';
+import { EdgeZonesEditor } from './EdgeZonesEditor';
 import type {
   DesignerState,
   Tool,
@@ -13,6 +16,7 @@ import type {
   EntryPoint,
   LayoutPattern,
   Metrics,
+  EdgeZoneConfig,
 } from '../types';
 import { CONSTANTS } from '../types';
 import {
@@ -21,16 +25,18 @@ import {
   createEntryPoint,
   createEdgeZone,
   createLoopPath,
+  createDimensionLabel,
+  createDirectionArrow,
   pixelsToMeters,
   metersToPixels,
   pointToMeters,
   pointToPixels,
 } from '../lib/canvas-utils';
-import { generateId } from '../lib/utils';
+import { generateId, snapPointToGrid, isPointInRect } from '../lib/utils';
 import { detectEdgeZones, getEdgeZoneRects } from '../algorithms/edgeZoneDetector';
 import { generateSpiralLoop } from '../algorithms/spiralGenerator';
 import { generateMeanderLoop } from '../algorithms/meanderGenerator';
-import { RoomDimensionEditor } from './RoomDimensionEditor';
+import { Button } from './ui/Button';
 
 export function MinimalDesigner() {
   const canvasRef = useRef<fabric.Canvas | null>(null);
@@ -40,15 +46,23 @@ export function MinimalDesigner() {
     obstacles: [],
     entryPoint: null,
     edgeZones: [],
+    edgeZoneConfig: {
+      top: 'window',
+      right: 'external-wall',
+      bottom: 'window',
+      left: 'door',
+    },
     heatingLoop: null,
     layoutPattern: 'spiral',
     isGenerating: false,
     metrics: null,
+    snapToGrid: true,
   });
 
   const [history, setHistory] = useState<DesignerState[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [showDimensionEditor, setShowDimensionEditor] = useState(false);
+  const [showEdgeZonesEditor, setShowEdgeZonesEditor] = useState(false);
 
   // Canvas ready handler
   const handleCanvasReady = useCallback((canvas: fabric.Canvas) => {
@@ -188,8 +202,17 @@ export function MinimalDesigner() {
     (roomRect as any).roomObject = true;
     canvas.add(roomRect);
 
-    // Detect and draw edge zones
-    const edgeZones = detectEdgeZones(room);
+    // Draw room dimension labels
+    const topLabel = createDimensionLabel(`${width.toFixed(1)}m`, x + width / 2, y - 0.3);
+    (topLabel as any).roomObject = true;
+    canvas.add(topLabel);
+
+    const leftLabel = createDimensionLabel(`${height.toFixed(1)}m`, x - 0.4, y + height / 2);
+    (leftLabel as any).roomObject = true;
+    canvas.add(leftLabel);
+
+    // Detect and draw edge zones using current config
+    const edgeZones = detectEdgeZones(room, prevState.edgeZoneConfig);
     const zoneRects = getEdgeZoneRects(room, edgeZones);
 
     for (const rect of zoneRects) {
@@ -235,22 +258,43 @@ export function MinimalDesigner() {
       return prevState;
     }
 
+    // Apply snap to grid if enabled
+    const snappedPoint = prevState.snapToGrid
+      ? snapPointToGrid(point, CONSTANTS.GRID_SIZE)
+      : point;
+
+    // Validate obstacle is inside room bounds
+    const room = prevState.room;
     const size = CONSTANTS.DEFAULT_OBSTACLE_SIZE;
+    const halfSize = size / 2;
+
+    const isInside = isPointInRect(
+      snappedPoint,
+      { x: room.position.x + halfSize, y: room.position.y + halfSize },
+      room.width - size,
+      room.height - size
+    );
+
+    if (!isInside) {
+      toast.error('Obstacle must be inside the room');
+      return prevState;
+    }
+
     const obstacle: Obstacle = {
       id: generateId(),
-      position: point,
+      position: snappedPoint,
       width: size,
       height: size,
     };
 
-    const obstacleRect = createObstacleRect(point.x, point.y, size, size);
+    const obstacleRect = createObstacleRect(snappedPoint.x, snappedPoint.y, size, size);
     (obstacleRect as any).obstacleId = obstacle.id;
     obstacle.fabricObject = obstacleRect;
 
     canvas.add(obstacleRect);
     canvas.renderAll();
 
-    toast.success('Obstacle added - drag to move, resize with handles');
+    toast.success(prevState.snapToGrid ? 'Obstacle added (snapped to grid)' : 'Obstacle added - drag to move');
 
     return {
       ...prevState,
@@ -322,12 +366,12 @@ export function MinimalDesigner() {
 
     const canvas = canvasRef.current;
 
-    // Remove old loop
+    // Remove old loop and arrows
     if (state.heatingLoop?.fabricObjects) {
       canvas.remove(...state.heatingLoop.fabricObjects);
     }
 
-    // Simulate async generation
+    // Simulate async generation (visual feedback)
     await new Promise((resolve) => setTimeout(resolve, 500));
 
     try {
@@ -340,7 +384,18 @@ export function MinimalDesigner() {
       const loopPath = createLoopPath(loop.path);
       canvas.add(loopPath);
       canvas.sendObjectToBack(loopPath);
-      loop.fabricObjects = [loopPath];
+
+      // Add direction arrows every ~2 meters
+      const arrowObjects: fabric.Object[] = [loopPath];
+      for (let i = 1; i < loop.path.length - 1; i += 20) {
+        // Every 20 points ≈ 2m at 10cm spacing
+        const arrow = createDirectionArrow(loop.path[i], loop.path[i + 1]);
+        (arrow as any).loopArrow = true;
+        canvas.add(arrow);
+        arrowObjects.push(arrow);
+      }
+
+      loop.fabricObjects = arrowObjects;
 
       // Calculate metrics
       const roomArea = state.room.width * state.room.height;
@@ -369,13 +424,15 @@ export function MinimalDesigner() {
         isGenerating: false,
       }));
 
-      toast.success(`Loop generated: ${loop.length.toFixed(1)}m`);
+      toast.success(`${state.layoutPattern} loop generated: ${loop.length.toFixed(1)}m`, {
+        description: `Coverage: ${coverage.toFixed(1)}%`,
+      });
     } catch (error) {
       console.error('Generation error:', error);
       toast.error('Failed to generate loop');
       setState((prev) => ({ ...prev, isGenerating: false }));
     }
-  }, [state.room, state.entryPoint, state.obstacles, state.edgeZones, state.heatingLoop]);
+  }, [state.room, state.entryPoint, state.obstacles, state.edgeZones, state.heatingLoop, state.layoutPattern]);
 
   // Delete selected obstacle
   const handleDelete = useCallback(() => {
@@ -438,8 +495,25 @@ export function MinimalDesigner() {
     (roomRect as any).roomObject = true;
     canvas.add(roomRect);
 
+    // Draw dimension labels
+    const topLabel = createDimensionLabel(
+      `${width.toFixed(1)}m`,
+      newRoom.position.x + width / 2,
+      newRoom.position.y - 0.3
+    );
+    (topLabel as any).roomObject = true;
+    canvas.add(topLabel);
+
+    const leftLabel = createDimensionLabel(
+      `${height.toFixed(1)}m`,
+      newRoom.position.x - 0.4,
+      newRoom.position.y + height / 2
+    );
+    (leftLabel as any).roomObject = true;
+    canvas.add(leftLabel);
+
     // Redraw edge zones
-    const edgeZones = detectEdgeZones(newRoom);
+    const edgeZones = detectEdgeZones(newRoom, state.edgeZoneConfig);
     const zoneRects = getEdgeZoneRects(newRoom, edgeZones);
 
     for (const rect of zoneRects) {
@@ -459,7 +533,81 @@ export function MinimalDesigner() {
     }));
 
     toast.success(`Room resized to ${width}m × ${height}m`);
+  }, [state.room, state.edgeZoneConfig]);
+
+  // Update edge zones configuration
+  const handleEdgeZonesConfig = useCallback((config: EdgeZoneConfig) => {
+    if (!canvasRef.current || !state.room) return;
+
+    const canvas = canvasRef.current;
+
+    // Remove old edge zones
+    const objects = canvas.getObjects();
+    objects.forEach((obj: any) => {
+      if (obj.roomObject && obj.type !== 'rect' && obj.type !== 'text') {
+        canvas.remove(obj);
+      }
+    });
+
+    // Regenerate edge zones with new config
+    const edgeZones = detectEdgeZones(state.room, config);
+    const zoneRects = getEdgeZoneRects(state.room, edgeZones);
+
+    for (const rect of zoneRects) {
+      const zoneObj = createEdgeZone(rect.x, rect.y, rect.width, rect.height);
+      (zoneObj as any).roomObject = true;
+      canvas.add(zoneObj);
+    }
+
+    canvas.renderAll();
+
+    setState((prev) => ({
+      ...prev,
+      edgeZones,
+      edgeZoneConfig: config,
+      heatingLoop: null,
+      metrics: null,
+    }));
+
+    toast.success('Edge zones updated');
   }, [state.room]);
+
+  // Clear all
+  const handleClearAll = useCallback(() => {
+    if (!canvasRef.current) return;
+
+    const confirmed = window.confirm(
+      'Clear everything? This will remove the room, obstacles, and heating loop. This cannot be undone.'
+    );
+
+    if (confirmed) {
+      const canvas = canvasRef.current;
+      canvas.getObjects().forEach((obj) => {
+        if ((obj as any).roomObject || (obj as any).obstacleId || (obj as any).entryObject) {
+          canvas.remove(obj);
+        }
+      });
+
+      // Remove loop objects
+      if (state.heatingLoop?.fabricObjects) {
+        canvas.remove(...state.heatingLoop.fabricObjects);
+      }
+
+      canvas.renderAll();
+
+      setState((prev) => ({
+        ...prev,
+        room: null,
+        obstacles: [],
+        entryPoint: null,
+        edgeZones: [],
+        heatingLoop: null,
+        metrics: null,
+      }));
+
+      toast.success('Canvas cleared');
+    }
+  }, [state.heatingLoop]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -504,6 +652,18 @@ export function MinimalDesigner() {
             toast.info('Edit room dimensions');
           }
           break;
+        case 'z':
+          if (state.room) {
+            setShowEdgeZonesEditor(true);
+            toast.info('Configure edge zones');
+          }
+          break;
+        case 'c':
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            handleClearAll();
+          }
+          break;
       }
     };
 
@@ -546,6 +706,7 @@ export function MinimalDesigner() {
         onUndo={handleUndo}
         onRedo={handleRedo}
         onExport={handleExport}
+        onClearAll={handleClearAll}
         canUndo={false}
         canRedo={false}
       />
@@ -563,6 +724,11 @@ export function MinimalDesigner() {
             setState((prev) => ({ ...prev, layoutPattern: pattern }))
           }
           isGenerating={state.isGenerating}
+          snapToGrid={state.snapToGrid}
+          onSnapToGridChange={(snap) => {
+            setState((prev) => ({ ...prev, snapToGrid: snap }));
+            toast.info(snap ? 'Snap to grid enabled' : 'Snap to grid disabled');
+          }}
         />
 
         <MetricsPanel metrics={state.metrics} isVisible={state.metrics !== null} />
@@ -575,9 +741,11 @@ export function MinimalDesigner() {
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">O</kbd> Add Obstacle</div>
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">E</kbd> Set Entry</div>
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">D</kbd> Edit Dimensions</div>
+            <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">Z</kbd> Edge Zones</div>
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">Esc</kbd> Select Tool</div>
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">Del</kbd> Delete Selected</div>
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">Ctrl+G</kbd> Generate</div>
+            <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">Ctrl+C</kbd> Clear All</div>
           </div>
         </div>
 
@@ -589,6 +757,26 @@ export function MinimalDesigner() {
             onApply={handleEditDimensions}
             onClose={() => setShowDimensionEditor(false)}
           />
+        )}
+
+        {/* Edge zones editor */}
+        {showEdgeZonesEditor && state.room && (
+          <EdgeZonesEditor
+            currentConfig={state.edgeZoneConfig}
+            onApply={handleEdgeZonesConfig}
+            onClose={() => setShowEdgeZonesEditor(false)}
+          />
+        )}
+
+        {/* Loading overlay */}
+        {state.isGenerating && (
+          <div className="absolute inset-0 bg-black/30 flex items-center justify-center z-40 backdrop-blur-sm">
+            <div className="bg-white rounded-lg shadow-xl px-8 py-6 flex flex-col items-center gap-4">
+              <Loader2 className="w-12 h-12 text-primary animate-spin" />
+              <div className="text-lg font-semibold text-text">Generating heating loop...</div>
+              <div className="text-sm text-text-light">This may take a moment</div>
+            </div>
+          </div>
         )}
       </div>
     </div>
