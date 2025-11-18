@@ -1,7 +1,7 @@
-import FloorPlanEditor from './components/FloorPlanEditor';
+import { MinimalDesigner } from './minimal/components/MinimalDesigner';
 
 function App() {
-  return <FloorPlanEditor />;
+  return <MinimalDesigner />;
 }
 
 export default App;
