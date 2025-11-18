@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import * as fabric from 'fabric';
 import { toast, Toaster } from 'sonner';
 import { TopBar } from './TopBar';
@@ -24,6 +24,7 @@ import {
   pixelsToMeters,
   metersToPixels,
   pointToMeters,
+  pointToPixels,
 } from '../lib/canvas-utils';
 import { generateId } from '../lib/utils';
 import { detectEdgeZones, getEdgeZoneRects } from '../algorithms/edgeZoneDetector';
@@ -49,40 +50,122 @@ export function MinimalDesigner() {
   // Canvas ready handler
   const handleCanvasReady = useCallback((canvas: fabric.Canvas) => {
     canvasRef.current = canvas;
+
+    // Add event handlers for object interactions
+    canvas.on('object:modified', (e: any) => {
+      if (!e.target) return;
+
+      const obj = e.target;
+
+      // Handle obstacle moved/resized
+      if ((obj as any).obstacleId) {
+        const obstacleId = (obj as any).obstacleId;
+        const rect = obj as fabric.Rect;
+
+        setState((prev) => ({
+          ...prev,
+          obstacles: prev.obstacles.map((obs) =>
+            obs.id === obstacleId
+              ? {
+                  ...obs,
+                  position: pointToMeters({
+                    x: (rect.left || 0) + (rect.width || 0) * (rect.scaleX || 1) / 2,
+                    y: (rect.top || 0) + (rect.height || 0) * (rect.scaleY || 1) / 2,
+                  }),
+                  width: pixelsToMeters((rect.width || 0) * (rect.scaleX || 1)),
+                  height: pixelsToMeters((rect.height || 0) * (rect.scaleY || 1)),
+                }
+              : obs
+          ),
+          heatingLoop: null,
+          metrics: null,
+        }));
+      }
+
+      // Handle entry point moved
+      if ((obj as any).entryObject) {
+        const circle = obj as fabric.Circle;
+        setState((prev) => {
+          if (!prev.entryPoint || !prev.room) return prev;
+
+          const newPos = pointToMeters({
+            x: circle.left || 0,
+            y: circle.top || 0,
+          });
+
+          // Determine which side is closest
+          const room = prev.room;
+          const distances = {
+            left: Math.abs(newPos.x - room.position.x),
+            right: Math.abs(newPos.x - (room.position.x + room.width)),
+            top: Math.abs(newPos.y - room.position.y),
+            bottom: Math.abs(newPos.y - (room.position.y + room.height)),
+          };
+
+          const side = (Object.keys(distances) as Array<keyof typeof distances>).reduce(
+            (a, b) => (distances[a] < distances[b] ? a : b)
+          );
+
+          return {
+            ...prev,
+            entryPoint: {
+              ...prev.entryPoint,
+              position: newPos,
+              side,
+            },
+            heatingLoop: null,
+            metrics: null,
+          };
+        });
+      }
+    });
+
+    // Handle selection for delete
+    canvas.on('selection:created', (e: any) => {
+      if (e.selected && e.selected.length > 0) {
+        const obj = e.selected[0];
+        (obj as any).isSelected = true;
+      }
+    });
+
+    canvas.on('selection:cleared', () => {
+      // Clear selection flag
+    });
   }, []);
 
   // Canvas click handler
-  const handleCanvasClick = useCallback(
-    (e: any) => {
-      if (!canvasRef.current || !e.pointer) return;
+  const handleCanvasClick = useCallback((e: any) => {
+    if (!e.pointer) return;
 
-      const pointer = e.pointer;
-      const pointMeters = pointToMeters({ x: pointer.x, y: pointer.y });
+    const pointer = e.pointer;
+    const pointMeters = pointToMeters({ x: pointer.x, y: pointer.y });
 
-      switch (state.currentTool) {
+    setState((prev) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return prev;
+
+      switch (prev.currentTool) {
         case 'draw-room':
-          handleDrawRoom(pointMeters);
-          break;
+          return handleDrawRoom(prev, canvas, pointMeters);
         case 'add-obstacle':
-          handleAddObstacle(pointMeters);
-          break;
+          return handleAddObstacle(prev, canvas, pointMeters);
         case 'set-entry':
-          handleSetEntryPoint(pointMeters);
-          break;
+          return handleSetEntryPoint(prev, canvas, pointMeters);
+        default:
+          return prev;
       }
-    },
-    [state.currentTool, state.room]
-  );
+    });
+  }, []);
 
-  // Draw room (simple rectangle for MVP)
-  const handleDrawRoom = useCallback((point: { x: number; y: number }) => {
-    if (!canvasRef.current) return;
-
+  // Draw room (pure function)
+  const handleDrawRoom = (
+    prevState: DesignerState,
+    canvas: fabric.Canvas,
+    point: { x: number; y: number }
+  ): DesignerState => {
     // Clear existing room
-    if (state.room) {
-      canvasRef.current.remove(
-        ...canvasRef.current.getObjects().filter((obj: any) => obj.roomObject)
-      );
+    if (prevState.room) {
+      canvas.remove(...canvas.getObjects().filter((obj: any) => obj.roomObject));
     }
 
     // Create centered room at click position
@@ -100,7 +183,7 @@ export function MinimalDesigner() {
     // Draw room rectangle
     const roomRect = createRoomRect(x, y, width, height);
     (roomRect as any).roomObject = true;
-    canvasRef.current.add(roomRect);
+    canvas.add(roomRect);
 
     // Detect and draw edge zones
     const edgeZones = detectEdgeZones(room);
@@ -109,113 +192,121 @@ export function MinimalDesigner() {
     for (const rect of zoneRects) {
       const zoneObj = createEdgeZone(rect.x, rect.y, rect.width, rect.height);
       (zoneObj as any).roomObject = true;
-      canvasRef.current.add(zoneObj);
+      canvas.add(zoneObj);
     }
 
-    // Set default entry point
+    // Set default entry point (on the left wall, inside the room)
     const entryPoint: EntryPoint = {
-      position: { x: x - 0.2, y: y + height / 2 },
+      position: { x: x + 0.1, y: y + height / 2 },
       side: 'left',
     };
 
     const entryObj = createEntryPoint(entryPoint.position.x, entryPoint.position.y);
     (entryObj as any).entryObject = true;
     entryPoint.fabricObject = entryObj;
-    canvasRef.current.add(entryObj);
+    canvas.add(entryObj);
 
-    canvasRef.current.renderAll();
+    canvas.renderAll();
 
-    setState((prev) => ({
-      ...prev,
+    toast.success(`Room created: ${width}m × ${height}m`);
+
+    return {
+      ...prevState,
       room,
       edgeZones,
       entryPoint,
       obstacles: [],
       heatingLoop: null,
       metrics: null,
-    }));
+    };
+  };
 
-    toast.success(`Room created: ${width}m × ${height}m`);
-  }, [state.room]);
+  // Add obstacle (pure function)
+  const handleAddObstacle = (
+    prevState: DesignerState,
+    canvas: fabric.Canvas,
+    point: { x: number; y: number }
+  ): DesignerState => {
+    if (!prevState.room) {
+      toast.error('Please create a room first');
+      return prevState;
+    }
 
-  // Add obstacle
-  const handleAddObstacle = useCallback(
-    (point: { x: number; y: number }) => {
-      if (!canvasRef.current || !state.room) return;
+    const size = CONSTANTS.DEFAULT_OBSTACLE_SIZE;
+    const obstacle: Obstacle = {
+      id: generateId(),
+      position: point,
+      width: size,
+      height: size,
+    };
 
-      const size = CONSTANTS.DEFAULT_OBSTACLE_SIZE;
-      const obstacle: Obstacle = {
-        id: generateId(),
-        position: point,
-        width: size,
-        height: size,
-      };
+    const obstacleRect = createObstacleRect(point.x, point.y, size, size);
+    (obstacleRect as any).obstacleId = obstacle.id;
+    obstacle.fabricObject = obstacleRect;
 
-      const obstacleRect = createObstacleRect(point.x, point.y, size, size);
-      (obstacleRect as any).obstacleId = obstacle.id;
-      obstacle.fabricObject = obstacleRect;
+    canvas.add(obstacleRect);
+    canvas.renderAll();
 
-      canvasRef.current.add(obstacleRect);
-      canvasRef.current.renderAll();
+    toast.success('Obstacle added - drag to move, resize with handles');
 
-      setState((prev) => ({
-        ...prev,
-        obstacles: [...prev.obstacles, obstacle],
-        heatingLoop: null,
-        metrics: null,
-      }));
+    return {
+      ...prevState,
+      obstacles: [...prevState.obstacles, obstacle],
+      heatingLoop: null,
+      metrics: null,
+    };
+  };
 
-      toast.success('Obstacle added');
-    },
-    [state.room]
-  );
+  // Set entry point (pure function)
+  const handleSetEntryPoint = (
+    prevState: DesignerState,
+    canvas: fabric.Canvas,
+    point: { x: number; y: number }
+  ): DesignerState => {
+    if (!prevState.room) {
+      toast.error('Please create a room first');
+      return prevState;
+    }
 
-  // Set entry point
-  const handleSetEntryPoint = useCallback(
-    (point: { x: number; y: number }) => {
-      if (!canvasRef.current || !state.room) return;
+    // Remove old entry point
+    if (prevState.entryPoint?.fabricObject) {
+      canvas.remove(prevState.entryPoint.fabricObject);
+    }
 
-      // Remove old entry point
-      if (state.entryPoint?.fabricObject) {
-        canvasRef.current.remove(state.entryPoint.fabricObject);
-      }
+    // Determine which side is closest
+    const room = prevState.room;
+    const distances = {
+      left: Math.abs(point.x - room.position.x),
+      right: Math.abs(point.x - (room.position.x + room.width)),
+      top: Math.abs(point.y - room.position.y),
+      bottom: Math.abs(point.y - (room.position.y + room.height)),
+    };
 
-      // Determine which side is closest
-      const room = state.room;
-      const distances = {
-        left: Math.abs(point.x - room.position.x),
-        right: Math.abs(point.x - (room.position.x + room.width)),
-        top: Math.abs(point.y - room.position.y),
-        bottom: Math.abs(point.y - (room.position.y + room.height)),
-      };
+    const side = (Object.keys(distances) as Array<keyof typeof distances>).reduce((a, b) =>
+      distances[a] < distances[b] ? a : b
+    );
 
-      const side = (Object.keys(distances) as Array<keyof typeof distances>).reduce((a, b) =>
-        distances[a] < distances[b] ? a : b
-      );
+    const entryPoint: EntryPoint = {
+      position: point,
+      side,
+    };
 
-      const entryPoint: EntryPoint = {
-        position: point,
-        side,
-      };
+    const entryObj = createEntryPoint(point.x, point.y);
+    (entryObj as any).entryObject = true;
+    entryPoint.fabricObject = entryObj;
 
-      const entryObj = createEntryPoint(point.x, point.y);
-      (entryObj as any).entryObject = true;
-      entryPoint.fabricObject = entryObj;
+    canvas.add(entryObj);
+    canvas.renderAll();
 
-      canvasRef.current.add(entryObj);
-      canvasRef.current.renderAll();
+    toast.success(`Entry point set on ${side} side - drag to move`);
 
-      setState((prev) => ({
-        ...prev,
-        entryPoint,
-        heatingLoop: null,
-        metrics: null,
-      }));
-
-      toast.success(`Entry point set on ${side} side`);
-    },
-    [state.room, state.entryPoint]
-  );
+    return {
+      ...prevState,
+      entryPoint,
+      heatingLoop: null,
+      metrics: null,
+    };
+  };
 
   // Generate heating loop
   const handleGenerate = useCallback(async () => {
@@ -226,9 +317,11 @@ export function MinimalDesigner() {
 
     setState((prev) => ({ ...prev, isGenerating: true }));
 
+    const canvas = canvasRef.current;
+
     // Remove old loop
     if (state.heatingLoop?.fabricObjects) {
-      canvasRef.current.remove(...state.heatingLoop.fabricObjects);
+      canvas.remove(...state.heatingLoop.fabricObjects);
     }
 
     // Simulate async generation
@@ -245,7 +338,8 @@ export function MinimalDesigner() {
 
       // Draw loop
       const loopPath = createLoopPath(loop.path);
-      canvasRef.current.add(loopPath);
+      canvas.add(loopPath);
+      canvas.sendObjectToBack(loopPath);
       loop.fabricObjects = [loopPath];
 
       // Calculate metrics
@@ -255,7 +349,7 @@ export function MinimalDesigner() {
         0
       );
       const heatedArea = loop.coverage;
-      const pipeDensity = loop.length / heatedArea;
+      const pipeDensity = heatedArea > 0 ? loop.length / heatedArea : 0;
       const coverage = (heatedArea / roomArea) * 100;
 
       const metrics: Metrics = {
@@ -266,7 +360,7 @@ export function MinimalDesigner() {
         coverage,
       };
 
-      canvasRef.current.renderAll();
+      canvas.renderAll();
 
       setState((prev) => ({
         ...prev,
@@ -282,6 +376,84 @@ export function MinimalDesigner() {
       setState((prev) => ({ ...prev, isGenerating: false }));
     }
   }, [state.room, state.entryPoint, state.obstacles, state.edgeZones, state.heatingLoop]);
+
+  // Delete selected obstacle
+  const handleDelete = useCallback(() => {
+    if (!canvasRef.current) return;
+
+    const canvas = canvasRef.current;
+    const activeObject = canvas.getActiveObject();
+
+    if (!activeObject) {
+      toast.info('Select an obstacle first');
+      return;
+    }
+
+    // Check if it's an obstacle
+    if ((activeObject as any).obstacleId) {
+      const obstacleId = (activeObject as any).obstacleId;
+
+      setState((prev) => ({
+        ...prev,
+        obstacles: prev.obstacles.filter((obs) => obs.id !== obstacleId),
+        heatingLoop: null,
+        metrics: null,
+      }));
+
+      canvas.remove(activeObject);
+      canvas.renderAll();
+
+      toast.success('Obstacle deleted');
+    } else if ((activeObject as any).entryObject) {
+      toast.error('Cannot delete entry point - move it instead');
+    } else {
+      toast.error('Cannot delete room elements');
+    }
+  }, []);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      // Ignore if typing in input
+      if ((e.target as HTMLElement).tagName === 'INPUT') return;
+
+      switch (e.key.toLowerCase()) {
+        case 'r':
+          setState((prev) => ({ ...prev, currentTool: 'draw-room' }));
+          toast.info('Tool: Draw Room');
+          break;
+        case 'o':
+          setState((prev) => ({ ...prev, currentTool: 'add-obstacle' }));
+          toast.info('Tool: Add Obstacle');
+          break;
+        case 'e':
+          setState((prev) => ({ ...prev, currentTool: 'set-entry' }));
+          toast.info('Tool: Set Entry Point');
+          break;
+        case 'escape':
+          setState((prev) => ({ ...prev, currentTool: 'select' }));
+          if (canvasRef.current) {
+            canvasRef.current.discardActiveObject();
+            canvasRef.current.renderAll();
+          }
+          toast.info('Tool: Select');
+          break;
+        case 'delete':
+        case 'backspace':
+          handleDelete();
+          break;
+        case 'g':
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            handleGenerate();
+          }
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [handleDelete, handleGenerate]);
 
   // Export
   const handleExport = useCallback(() => {
@@ -312,7 +484,7 @@ export function MinimalDesigner() {
 
   return (
     <div className="h-screen flex flex-col bg-background">
-      <Toaster position="top-right" />
+      <Toaster position="top-right" richColors />
 
       <TopBar
         onUndo={handleUndo}
@@ -338,6 +510,19 @@ export function MinimalDesigner() {
         />
 
         <MetricsPanel metrics={state.metrics} isVisible={state.metrics !== null} />
+
+        {/* Keyboard shortcuts help */}
+        <div className="absolute bottom-20 left-6 bg-white/90 backdrop-blur rounded-lg shadow-lg px-4 py-3 text-xs text-text-light">
+          <div className="font-semibold mb-2 text-text">Keyboard Shortcuts:</div>
+          <div className="space-y-1">
+            <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">R</kbd> Draw Room</div>
+            <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">O</kbd> Add Obstacle</div>
+            <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">E</kbd> Set Entry</div>
+            <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">Esc</kbd> Select Tool</div>
+            <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">Del</kbd> Delete Selected</div>
+            <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">Ctrl+G</kbd> Generate</div>
+          </div>
+        </div>
       </div>
     </div>
   );
