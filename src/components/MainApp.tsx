@@ -1,8 +1,12 @@
-// @ts-nocheck
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import * as fabric from 'fabric';
 import { jsPDF } from 'jspdf';
+import {
+  generateLoopForRoom,
+  type LoopGenerationParams
+} from '../utils/loopGeneration';
+import { type Point } from '../utils/gridUtils';
 
 interface Room {
   id: string;
@@ -11,8 +15,8 @@ interface Room {
   points: { x: number; y: number }[];
   area: number;
   temperature: number;
-  supplyPath: fabric.Path | null;
-  returnPath: fabric.Path | null;
+  supplyPath: fabric.Line | null;
+  returnPath: fabric.Line | null;
   loopPath: fabric.Path | null;
   pipeLength: number;
   routingLength: number;
@@ -79,7 +83,7 @@ function MainApp() {
   // Load floor plan image to canvas
   useEffect(() => {
     if (floorPlanImage && fabricCanvasRef.current && !floorPlanImageObj) {
-      fabric.Image.fromURL(floorPlanImage, (img: fabric.Image) => {
+      fabric.Image.fromURL(floorPlanImage).then((img) => {
         const canvas = fabricCanvasRef.current!;
 
         // Scale image to fit canvas
@@ -95,7 +99,8 @@ function MainApp() {
           evented: false
         });
 
-        canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas));
+        canvas.backgroundImage = img;
+        canvas.renderAll();
         setFloorPlanImageObj(img);
       });
     }
@@ -308,9 +313,6 @@ function MainApp() {
     // Calculate area
     const area = calculatePolygonArea(currentPoints);
 
-    // Find closest point on polygon to manifold (entry point)
-    const entryPoint = findClosestPointOnPolygon(manifoldPosition!, currentPoints);
-
     // Create room object
     const newRoom: Room = {
       id: Date.now().toString(),
@@ -364,27 +366,6 @@ function MainApp() {
     return Math.round(area / 1000) / 10;
   };
 
-  // Find closest point on polygon to manifold
-  const findClosestPointOnPolygon = (
-    manifold: { x: number; y: number },
-    polygon: { x: number; y: number }[]
-  ): { x: number; y: number } => {
-    let minDist = Infinity;
-    let closest = polygon[0];
-
-    for (const point of polygon) {
-      const dist = Math.sqrt(
-        Math.pow(point.x - manifold.x, 2) + Math.pow(point.y - manifold.y, 2)
-      );
-      if (dist < minDist) {
-        minDist = dist;
-        closest = point;
-      }
-    }
-
-    return closest;
-  };
-
   // Delete room
   const deleteRoom = (roomId: string) => {
     const room = rooms.find(r => r.id === roomId);
@@ -420,190 +401,48 @@ function MainApp() {
     if (room.returnPath) fabricCanvasRef.current.remove(room.returnPath);
     if (room.loopPath) fabricCanvasRef.current.remove(room.loopPath);
 
-    // Find entry point (closest point on polygon to manifold)
-    const entryPoint = findClosestPointOnPolygon(manifoldPosition, room.points);
+    // Convert pixel coordinates to meters for the utils function
+    // Note: MainApp uses pixels directly (900x700 canvas), rough conversion: 100px = 1m
+    const pixelsToMeters = (px: number) => px / 100;
+    const roomPolygonMeters: Point[] = room.points.map(p => ({
+      x: pixelsToMeters(p.x),
+      y: pixelsToMeters(p.y)
+    }));
+    const manifoldPositionMeters: Point = {
+      x: pixelsToMeters(manifoldPosition.x),
+      y: pixelsToMeters(manifoldPosition.y)
+    };
 
-    // Calculate routing distance
-    const routingDist = Math.sqrt(
-      Math.pow(entryPoint.x - manifoldPosition.x, 2) +
-      Math.pow(entryPoint.y - manifoldPosition.y, 2)
-    );
+    // Prepare loop generation parameters
+    const params: LoopGenerationParams = {
+      pipeSpacing,
+      edgeZone,
+      edgeSpacing,
+      pattern
+    };
 
-    // Generate loop in room
-    const loopPath = pattern === 'spiral'
-      ? generateReverseReturnSpiral(room, entryPoint)
-      : generateMeanderLoop(room, entryPoint);
-
-    // Create supply path (manifold to entry point) - RED
-    const supplyPath = new fabric.Line(
-      [manifoldPosition.x, manifoldPosition.y, entryPoint.x, entryPoint.y],
-      {
-        stroke: '#ef4444',
-        strokeWidth: 3,
-        selectable: false,
-        evented: false,
-        strokeDashArray: [10, 5]
-      }
-    );
-
-    // Create return path (exit point to manifold) - BLUE
-    const returnPath = new fabric.Line(
-      [entryPoint.x, entryPoint.y, manifoldPosition.x, manifoldPosition.y],
-      {
-        stroke: '#3b82f6',
-        strokeWidth: 3,
-        selectable: false,
-        evented: false,
-        strokeDashArray: [10, 5]
-      }
+    // Generate loop using utility function
+    const result = generateLoopForRoom(
+      roomPolygonMeters,
+      manifoldPositionMeters,
+      params
     );
 
     // Add to canvas
-    fabricCanvasRef.current.add(supplyPath);
-    fabricCanvasRef.current.add(loopPath);
-    fabricCanvasRef.current.add(returnPath);
+    fabricCanvasRef.current.add(result.supplyPath);
+    fabricCanvasRef.current.add(result.loopPath);
+    fabricCanvasRef.current.add(result.returnPath);
 
-    // Calculate total length
-    const loopLength = estimatePathLength(loopPath);
-    const totalLength = loopLength + (routingDist * 2); // Supply + return
-
-    // Update room
+    // Update room with generated paths
     updateRoom(room.id, {
-      supplyPath: supplyPath,
-      returnPath: returnPath,
-      loopPath: loopPath,
-      pipeLength: Math.round(totalLength / 10), // Convert px to meters (rough)
-      routingLength: Math.round(routingDist * 2 / 10)
+      supplyPath: result.supplyPath,
+      returnPath: result.returnPath,
+      loopPath: result.loopPath,
+      pipeLength: Math.round(result.loopLength + result.routingLength),
+      routingLength: Math.round(result.routingLength)
     });
 
     fabricCanvasRef.current.renderAll();
-  };
-
-  // Generate reverse return spiral
-  const generateReverseReturnSpiral = (
-    room: Room,
-    entryPoint: { x: number; y: number }
-  ): fabric.Path => {
-    const points = room.points;
-    const bounds = room.polygon.getBoundingRect();
-    const centerX = bounds.left + bounds.width / 2;
-    const centerY = bounds.top + bounds.height / 2;
-
-    const spacing = pipeSpacing / 10;
-    let pathData = `M ${entryPoint.x} ${entryPoint.y}`;
-
-    // First, go around perimeter
-    const perimeterPoints = room.points;
-    for (const pt of perimeterPoints) {
-      if (isPointInPolygon(pt, points)) {
-        pathData += ` L ${pt.x} ${pt.y}`;
-      }
-    }
-
-    // Spiral inward to center
-    let angle = 0;
-    let radius = Math.min(bounds.width, bounds.height) / 2;
-
-    while (radius > spacing) {
-      angle += 0.2;
-      const x = centerX + radius * Math.cos(angle);
-      const y = centerY + radius * Math.sin(angle);
-
-      if (isPointInPolygon({ x, y }, points)) {
-        pathData += ` L ${x} ${y}`;
-      }
-
-      radius -= spacing / 15;
-    }
-
-    // Spiral outward (return)
-    radius = spacing;
-    while (radius < Math.min(bounds.width, bounds.height) / 2) {
-      angle += 0.2;
-      const x = centerX + radius * Math.cos(angle + Math.PI);
-      const y = centerY + radius * Math.sin(angle + Math.PI);
-
-      if (isPointInPolygon({ x, y }, points)) {
-        pathData += ` L ${x} ${y}`;
-      }
-
-      radius += spacing / 15;
-    }
-
-    // Return to entry point
-    pathData += ` L ${entryPoint.x} ${entryPoint.y}`;
-
-    return new fabric.Path(pathData, {
-      stroke: '#f97316',
-      strokeWidth: 2,
-      fill: '',
-      selectable: false,
-      evented: false
-    });
-  };
-
-  // Generate meander loop
-  const generateMeanderLoop = (
-    room: Room,
-    entryPoint: { x: number; y: number }
-  ): fabric.Path => {
-    const points = room.points;
-    const bounds = room.polygon.getBoundingRect();
-    const spacing = pipeSpacing / 10;
-
-    let pathData = `M ${entryPoint.x} ${entryPoint.y}`;
-    let direction = 1;
-
-    for (let y = bounds.top; y < bounds.top + bounds.height; y += spacing) {
-      if (direction === 1) {
-        for (let x = bounds.left; x < bounds.left + bounds.width; x += 5) {
-          if (isPointInPolygon({ x, y }, points)) {
-            pathData += ` L ${x} ${y}`;
-          }
-        }
-      } else {
-        for (let x = bounds.left + bounds.width; x > bounds.left; x -= 5) {
-          if (isPointInPolygon({ x, y }, points)) {
-            pathData += ` L ${x} ${y}`;
-          }
-        }
-      }
-      direction *= -1;
-    }
-
-    pathData += ` L ${entryPoint.x} ${entryPoint.y}`;
-
-    return new fabric.Path(pathData, {
-      stroke: '#f97316',
-      strokeWidth: 2,
-      fill: '',
-      selectable: false,
-      evented: false
-    });
-  };
-
-  // Check if point is inside polygon
-  const isPointInPolygon = (point: { x: number; y: number }, polygon: { x: number; y: number }[]): boolean => {
-    let inside = false;
-    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-      const xi = polygon[i].x, yi = polygon[i].y;
-      const xj = polygon[j].x, yj = polygon[j].y;
-
-      const intersect = ((yi > point.y) !== (yj > point.y))
-          && (point.x < (xj - xi) * (point.y - yi) / (yj - yi) + xi);
-      if (intersect) inside = !inside;
-    }
-    return inside;
-  };
-
-  // Estimate path length
-  const estimatePathLength = (path: fabric.Path): number => {
-    return (path.path?.reduce((len: number, cmd: any) => {
-      if (cmd[0] === 'L' || cmd[0] === 'M') {
-        return len + 10;
-      }
-      return len;
-    }, 0) || 0);
   };
 
   // Generate all loops

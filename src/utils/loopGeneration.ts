@@ -1,7 +1,12 @@
 // Loop generation algorithms for floor heating
 import * as fabric from 'fabric';
-import { type Point, metersToPixels, distance } from './gridUtils';
+import { type Point, metersToPixels, distance, PIXELS_PER_METER } from './gridUtils';
 import { isPointInPolygon } from './roomDetection';
+
+// Algorithm constants
+const SPIRAL_ANGLE_INCREMENT = 0.2; // Radians per step for spiral
+const SPIRAL_RADIUS_DIVISOR = 15; // Controls spiral tightness
+const MEANDER_STEP_SIZE = 0.05; // 5cm step for smooth meander lines
 
 export interface LoopGenerationParams {
   pipeSpacing: number; // in cm (e.g., 20cm)
@@ -138,7 +143,7 @@ function generateReverseReturnSpiral(
   let radius = Math.min(width, height) / 2;
 
   while (radius > spacing) {
-    angle += 0.2;
+    angle += SPIRAL_ANGLE_INCREMENT;
     const x = centerX + radius * Math.cos(angle);
     const y = centerY + radius * Math.sin(angle);
 
@@ -146,13 +151,13 @@ function generateReverseReturnSpiral(
       pathData += ` L ${metersToPixels(x)} ${metersToPixels(y)}`;
     }
 
-    radius -= spacing / 15;
+    radius -= spacing / SPIRAL_RADIUS_DIVISOR;
   }
 
   // Spiral outward (return path)
   radius = spacing;
   while (radius < Math.min(width, height) / 2) {
-    angle += 0.2;
+    angle += SPIRAL_ANGLE_INCREMENT;
     const x = centerX + radius * Math.cos(angle + Math.PI);
     const y = centerY + radius * Math.sin(angle + Math.PI);
 
@@ -160,7 +165,7 @@ function generateReverseReturnSpiral(
       pathData += ` L ${metersToPixels(x)} ${metersToPixels(y)}`;
     }
 
-    radius += spacing / 15;
+    radius += spacing / SPIRAL_RADIUS_DIVISOR;
   }
 
   // Return to entry point
@@ -191,7 +196,7 @@ function generateMeanderLoop(
   const maxY = Math.max(...polygon.map(p => p.y));
 
   const spacing = params.pipeSpacing / 100; // convert cm to meters
-  const step = 0.05; // 5cm step for smooth lines
+  const step = MEANDER_STEP_SIZE; // 5cm step for smooth lines
 
   let pathData = `M ${metersToPixels(entryPoint.x)} ${metersToPixels(entryPoint.y)}`;
   let direction = 1;
@@ -267,7 +272,7 @@ function estimatePathLength(path: fabric.Path): number {
         const dx = currentPoint[0] - lastPoint[0];
         const dy = currentPoint[1] - lastPoint[1];
         const distPixels = Math.sqrt(dx * dx + dy * dy);
-        totalLength += distPixels / 100; // 100 pixels = 1 meter
+        totalLength += distPixels / PIXELS_PER_METER;
       }
 
       lastPoint = currentPoint;

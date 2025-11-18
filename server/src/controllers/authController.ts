@@ -1,7 +1,18 @@
-// @ts-nocheck
 import { Request, Response } from 'express';
-import jwt from 'jsonwebtoken';
+import jwt, { SignOptions } from 'jsonwebtoken';
 import { UserModel } from '../models/User';
+
+// Email validation regex (RFC 5322 simplified)
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Get JWT secret - throw error if not configured
+function getJWTSecret(): string {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT_SECRET environment variable is not configured. Please set it in .env file.');
+  }
+  return secret;
+}
 
 export const register = async (req: Request, res: Response) => {
   try {
@@ -10,6 +21,11 @@ export const register = async (req: Request, res: Response) => {
     // Validation
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    // Validate email format
+    if (!EMAIL_REGEX.test(email)) {
+      return res.status(400).json({ error: 'Invalid email format' });
     }
 
     if (password.length < 6) {
@@ -26,9 +42,10 @@ export const register = async (req: Request, res: Response) => {
     const user = await UserModel.create({ email, password, name });
 
     // Generate JWT
-    const jwtSecret = process.env.JWT_SECRET || 'fallback-secret';
+    const jwtSecret = getJWTSecret();
     const jwtExpiry = process.env.JWT_EXPIRES_IN || '7d';
-    const token = jwt.sign({ userId: user.id }, jwtSecret, { expiresIn: jwtExpiry });
+    // Type assertion needed due to jwt library typing issues
+    const token = jwt.sign({ userId: user.id }, jwtSecret, { expiresIn: jwtExpiry } as any);
 
     res.status(201).json({
       message: 'User registered successfully',
@@ -54,6 +71,11 @@ export const login = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
+    // Validate email format
+    if (!EMAIL_REGEX.test(email)) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+
     // Find user
     const user = await UserModel.findByEmail(email);
     if (!user) {
@@ -67,9 +89,10 @@ export const login = async (req: Request, res: Response) => {
     }
 
     // Generate JWT
-    const jwtSecret = process.env.JWT_SECRET || 'fallback-secret';
+    const jwtSecret = getJWTSecret();
     const jwtExpiry = process.env.JWT_EXPIRES_IN || '7d';
-    const token = jwt.sign({ userId: user.id }, jwtSecret, { expiresIn: jwtExpiry });
+    // Type assertion needed due to jwt library typing issues
+    const token = jwt.sign({ userId: user.id }, jwtSecret, { expiresIn: jwtExpiry } as any);
 
     res.json({
       message: 'Login successful',
