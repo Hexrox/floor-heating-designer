@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as fabric from 'fabric';
 import { jsPDF } from 'jspdf';
@@ -43,8 +42,8 @@ interface Room {
   points: Point[]; // w metrach
   area: number;
   temperature: number;
-  supplyPath: fabric.Path | null;
-  returnPath: fabric.Path | null;
+  supplyPath: fabric.Line | null;
+  returnPath: fabric.Line | null;
   loopPath: fabric.Path | null;
   pipeLength: number;
   routingLength: number;
@@ -1804,7 +1803,7 @@ function FloorPlanEditor() {
     if (newVisibility) {
       canvas.backgroundImage = backgroundImage;
     } else {
-      canvas.backgroundImage = null;
+      canvas.backgroundImage = undefined;
     }
     canvas.renderAll();
 
@@ -1829,7 +1828,7 @@ function FloorPlanEditor() {
 
     if (confirm('Czy na pewno chcesz usunąć obraz tła?')) {
       const canvas = fabricCanvasRef.current;
-      canvas.backgroundImage = null;
+      canvas.backgroundImage = undefined;
       canvas.renderAll();
       setBackgroundImage(null);
       setCustomScale(null);
@@ -2454,7 +2453,7 @@ function FloorPlanEditor() {
                       <div className="flex-1">
                         <p className="text-sm font-medium text-gray-900">Ściana {idx + 1}</p>
                         <p className="text-xs text-gray-600">
-                          {formatMeters(distance(wall.start, wall.end), 1)}
+                          {formatMeters(distance(wall.start, wall.end))}
                         </p>
                       </div>
                       <button
