@@ -9,7 +9,8 @@ export function generateSpiralLoop(
   room: Room,
   entryPoint: EntryPoint,
   obstacles: Obstacle[],
-  edgeZones: EdgeZone[]
+  edgeZones: EdgeZone[],
+  pipeSpacing: number
 ): HeatingLoop {
   const path: LoopPoint[] = [];
 
@@ -17,7 +18,7 @@ export function generateSpiralLoop(
   let currentX = entryPoint.position.x;
   let currentY = entryPoint.position.y;
 
-  path.push({ x: currentX, y: currentY, spacing: CONSTANTS.PIPE_SPACING_NORMAL });
+  path.push({ x: currentX, y: currentY, spacing: pipeSpacing });
 
   // Move to room corner based on entry side
   const roomBounds = {
@@ -47,15 +48,15 @@ export function generateSpiralLoop(
       break;
   }
 
-  path.push({ x: currentX, y: currentY, spacing: CONSTANTS.PIPE_SPACING_EDGE });
+  path.push({ x: currentX, y: currentY, spacing: pipeSpacing });
 
   // Generate spiral from outside to inside
   let layer = 0;
   let direction = 0; // 0=right, 1=down, 2=left, 3=up
-  const maxLayers = Math.floor(Math.min(room.width, room.height) / (CONSTANTS.PIPE_SPACING_NORMAL * 2));
+  const maxLayers = Math.floor(Math.min(room.width, room.height) / (pipeSpacing * 2));
 
   while (layer < maxLayers) {
-    const spacing = layer === 0 ? CONSTANTS.PIPE_SPACING_EDGE : CONSTANTS.PIPE_SPACING_NORMAL;
+    const spacing = pipeSpacing;
     const margin = 0.1 + layer * spacing;
 
     const bounds = {
@@ -120,7 +121,7 @@ export function generateSpiralLoop(
   }
 
   // Return to entry point
-  path.push({ x: entryPoint.position.x, y: entryPoint.position.y, spacing: CONSTANTS.PIPE_SPACING_NORMAL });
+  path.push({ x: entryPoint.position.x, y: entryPoint.position.y, spacing: pipeSpacing });
 
   // Calculate total length
   let totalLength = 0;

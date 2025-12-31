@@ -9,7 +9,8 @@ export function generateMeanderLoop(
   room: Room,
   entryPoint: EntryPoint,
   obstacles: Obstacle[],
-  edgeZones: EdgeZone[]
+  edgeZones: EdgeZone[],
+  pipeSpacing: number
 ): HeatingLoop {
   const path: LoopPoint[] = [];
 
@@ -17,7 +18,7 @@ export function generateMeanderLoop(
   let currentX = entryPoint.position.x;
   let currentY = entryPoint.position.y;
 
-  path.push({ x: currentX, y: currentY, spacing: CONSTANTS.PIPE_SPACING_NORMAL });
+  path.push({ x: currentX, y: currentY, spacing: pipeSpacing });
 
   const roomBounds = {
     left: room.position.x + 0.1,
@@ -29,10 +30,10 @@ export function generateMeanderLoop(
   // Navigate to starting corner (top-left)
   currentX = roomBounds.left;
   currentY = roomBounds.top;
-  path.push({ x: currentX, y: currentY, spacing: CONSTANTS.PIPE_SPACING_EDGE });
+  path.push({ x: currentX, y: currentY, spacing: pipeSpacing });
 
   // Meander pattern: horizontal serpentine
-  const spacing = CONSTANTS.PIPE_SPACING_NORMAL;
+  const spacing = pipeSpacing;
   let goingRight = true;
   let y = roomBounds.top;
 
@@ -69,7 +70,7 @@ export function generateMeanderLoop(
   }
 
   // Return to entry point
-  path.push({ x: entryPoint.position.x, y: entryPoint.position.y, spacing: CONSTANTS.PIPE_SPACING_NORMAL });
+  path.push({ x: entryPoint.position.x, y: entryPoint.position.y, spacing: pipeSpacing });
 
   // Calculate total length
   let totalLength = 0;

@@ -7,7 +7,6 @@ import { CanvasArea } from './CanvasArea';
 import { FloatingToolbar } from './FloatingToolbar';
 import { MetricsPanel } from './MetricsPanel';
 import { RoomDimensionEditor } from './RoomDimensionEditor';
-import { EdgeZonesEditor } from './EdgeZonesEditor';
 import type {
   DesignerState,
   Tool,
@@ -54,6 +53,7 @@ export function MinimalDesigner() {
     },
     heatingLoop: null,
     layoutPattern: 'spiral',
+    pipeSpacing: 0.15, // default 15cm
     isGenerating: false,
     metrics: null,
     snapToGrid: true,
@@ -62,7 +62,6 @@ export function MinimalDesigner() {
   const [history, setHistory] = useState<DesignerState[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [showDimensionEditor, setShowDimensionEditor] = useState(false);
-  const [showEdgeZonesEditor, setShowEdgeZonesEditor] = useState(false);
 
   // Canvas ready handler
   const handleCanvasReady = useCallback((canvas: fabric.Canvas) => {
@@ -377,8 +376,8 @@ export function MinimalDesigner() {
     try {
       // Generate loop based on selected pattern
       const loop = state.layoutPattern === 'spiral'
-        ? generateSpiralLoop(state.room, state.entryPoint, state.obstacles, state.edgeZones)
-        : generateMeanderLoop(state.room, state.entryPoint, state.obstacles, state.edgeZones);
+        ? generateSpiralLoop(state.room, state.entryPoint, state.obstacles, state.edgeZones, state.pipeSpacing)
+        : generateMeanderLoop(state.room, state.entryPoint, state.obstacles, state.edgeZones, state.pipeSpacing);
 
       // Draw loop
       const loopPath = createLoopPath(loop.path);
@@ -424,9 +423,22 @@ export function MinimalDesigner() {
         isGenerating: false,
       }));
 
-      toast.success(`${state.layoutPattern} loop generated: ${loop.length.toFixed(1)}m`, {
-        description: `Coverage: ${coverage.toFixed(1)}%`,
-      });
+      // Check if loop is too long
+      const MAX_LOOP_LENGTH = 80; // meters for 16mm pipe
+      if (loop.length > MAX_LOOP_LENGTH) {
+        const requiredCircuits = Math.ceil(loop.length / MAX_LOOP_LENGTH);
+        toast.warning(
+          `Loop too long: ${loop.length.toFixed(1)}m (max ${MAX_LOOP_LENGTH}m)`,
+          {
+            description: `Split into ${requiredCircuits} circuits or reduce room size`,
+            duration: 8000,
+          }
+        );
+      } else {
+        toast.success(`${state.layoutPattern} loop generated: ${loop.length.toFixed(1)}m`, {
+          description: `Coverage: ${coverage.toFixed(1)}%`,
+        });
+      }
     } catch (error) {
       console.error('Generation error:', error);
       toast.error('Failed to generate loop');
@@ -535,43 +547,6 @@ export function MinimalDesigner() {
     toast.success(`Room resized to ${width}m × ${height}m`);
   }, [state.room, state.edgeZoneConfig]);
 
-  // Update edge zones configuration
-  const handleEdgeZonesConfig = useCallback((config: EdgeZoneConfig) => {
-    if (!canvasRef.current || !state.room) return;
-
-    const canvas = canvasRef.current;
-
-    // Remove old edge zones
-    const objects = canvas.getObjects();
-    objects.forEach((obj: any) => {
-      if (obj.roomObject && obj.type !== 'rect' && obj.type !== 'text') {
-        canvas.remove(obj);
-      }
-    });
-
-    // Regenerate edge zones with new config
-    const edgeZones = detectEdgeZones(state.room, config);
-    const zoneRects = getEdgeZoneRects(state.room, edgeZones);
-
-    for (const rect of zoneRects) {
-      const zoneObj = createEdgeZone(rect.x, rect.y, rect.width, rect.height);
-      (zoneObj as any).roomObject = true;
-      canvas.add(zoneObj);
-    }
-
-    canvas.renderAll();
-
-    setState((prev) => ({
-      ...prev,
-      edgeZones,
-      edgeZoneConfig: config,
-      heatingLoop: null,
-      metrics: null,
-    }));
-
-    toast.success('Edge zones updated');
-  }, [state.room]);
-
   // Clear all
   const handleClearAll = useCallback(() => {
     if (!canvasRef.current) return;
@@ -652,12 +627,6 @@ export function MinimalDesigner() {
             toast.info('Edit room dimensions');
           }
           break;
-        case 'z':
-          if (state.room) {
-            setShowEdgeZonesEditor(true);
-            toast.info('Configure edge zones');
-          }
-          break;
         case 'c':
           if (e.ctrlKey || e.metaKey) {
             e.preventDefault();
@@ -723,6 +692,11 @@ export function MinimalDesigner() {
           onPatternChange={(pattern) =>
             setState((prev) => ({ ...prev, layoutPattern: pattern }))
           }
+          pipeSpacing={state.pipeSpacing}
+          onPipeSpacingChange={(spacing) => {
+            setState((prev) => ({ ...prev, pipeSpacing: spacing, heatingLoop: null, metrics: null }));
+            toast.info(`Pipe spacing: ${spacing * 100}cm`);
+          }}
           isGenerating={state.isGenerating}
           snapToGrid={state.snapToGrid}
           onSnapToGridChange={(snap) => {
@@ -741,7 +715,6 @@ export function MinimalDesigner() {
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">O</kbd> Add Obstacle</div>
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">E</kbd> Set Entry</div>
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">D</kbd> Edit Dimensions</div>
-            <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">Z</kbd> Edge Zones</div>
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">Esc</kbd> Select Tool</div>
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">Del</kbd> Delete Selected</div>
             <div><kbd className="px-1.5 py-0.5 bg-gray-200 rounded">Ctrl+G</kbd> Generate</div>
@@ -756,15 +729,6 @@ export function MinimalDesigner() {
             currentHeight={state.room.height}
             onApply={handleEditDimensions}
             onClose={() => setShowDimensionEditor(false)}
-          />
-        )}
-
-        {/* Edge zones editor */}
-        {showEdgeZonesEditor && state.room && (
-          <EdgeZonesEditor
-            currentConfig={state.edgeZoneConfig}
-            onApply={handleEdgeZonesConfig}
-            onClose={() => setShowEdgeZonesEditor(false)}
           />
         )}
 

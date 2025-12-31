@@ -90,6 +90,7 @@ export interface DesignerState {
   edgeZoneConfig: EdgeZoneConfig;
   heatingLoop: HeatingLoop | null;
   layoutPattern: LayoutPattern;
+  pipeSpacing: number; // in meters (0.10 or 0.15)
   isGenerating: boolean;
   metrics: Metrics | null;
   snapToGrid: boolean;

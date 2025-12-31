@@ -14,6 +14,8 @@ interface FloatingToolbarProps {
   isGenerating: boolean;
   snapToGrid: boolean;
   onSnapToGridChange: (snap: boolean) => void;
+  pipeSpacing: number;
+  onPipeSpacingChange: (spacing: number) => void;
 }
 
 export function FloatingToolbar({
@@ -26,6 +28,8 @@ export function FloatingToolbar({
   isGenerating,
   snapToGrid,
   onSnapToGridChange,
+  pipeSpacing,
+  onPipeSpacingChange,
 }: FloatingToolbarProps) {
   return (
     <motion.div
@@ -78,6 +82,19 @@ export function FloatingToolbar({
           >
             <option value="spiral">Spiral</option>
             <option value="meander">Meander</option>
+          </select>
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-text-light">Spacing</label>
+          <select
+            value={pipeSpacing}
+            onChange={(e) => onPipeSpacingChange(Number(e.target.value))}
+            className="px-2 py-1 text-sm border border-gray-300 rounded bg-white"
+            disabled={!hasRoom}
+          >
+            <option value={0.10}>10 cm</option>
+            <option value={0.15}>15 cm</option>
           </select>
         </div>
 
